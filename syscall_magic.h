@@ -76,4 +76,4 @@ struct sched_attr {
 	syscall(__NR_sched_getattr, pid, attr, size, flags)
 
 #define sched_setattr(pid, attr, flags) \
-	syscall(__NR_sched_setattr, pid, attr)
+	syscall(__NR_sched_setattr, pid, attr, flags)
