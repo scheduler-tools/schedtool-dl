@@ -787,7 +787,7 @@ void print_process(pid_t pid)
 			      );
 
 			if (policy == SCHED_DEADLINE) {
-				printf(", RUNTIME %Ldus DEADLINE %Ldus FLAGS 0x%04x",
+				printf(", RUNTIME %lldus DEADLINE %lldus FLAGS 0x%04llx",
 				       p.sched_runtime,
 				       p.sched_deadline,
 				       p.sched_flags);
