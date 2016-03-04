@@ -478,11 +478,11 @@ int set_process(pid_t pid, int policy, struct sched_attr *p, unsigned int flags)
 
 	if((ret=sched_setattr(pid, p, flags))) {
 
-                /* la la pointer mismatch .. lala */
-		decode_error((CHECK_RANGE_POLICY(policy) ? msg1 : msg2),
-			     pid,
-			     (CHECK_RANGE_POLICY(policy) ? TAB[policy] : policy)
-			    );
+		if (CHECK_RANGE_POLICY(policy)) {
+			decode_error(msg1, pid, TAB[policy]);
+		} else {
+			decode_error(msg2, pid, policy);
+		}
 		return(ret);
 	}
 	return(0);
@@ -787,7 +787,7 @@ void print_process(pid_t pid)
 			      );
 
 			if (policy == SCHED_DEADLINE) {
-				printf(", RUNTIME %Ldus DEADLINE %Ldus FLAGS 0x%04x",
+				printf(", RUNTIME %lldus DEADLINE %lldus FLAGS 0x%04llx",
 				       p.sched_runtime,
 				       p.sched_deadline,
 				       p.sched_flags);
