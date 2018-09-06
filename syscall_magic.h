@@ -53,6 +53,7 @@ _syscall3 (int, sched_getaffinity, pid_t, pid, unsigned int, len, unsigned long 
 
 #define SF_SIG_RORUN	2
 #define SF_SIG_DMISS	4
+#define SF_UTIL_CLAMP	48
 
 struct sched_attr {
 	__u32 size;
@@ -70,6 +71,10 @@ struct sched_attr {
 	__u64 sched_runtime;
 	__u64 sched_deadline;
 	__u64 sched_period;
+
+	/* UCLAMP */
+	__u32 sched_util_min;
+	__u32 sched_util_max;
 };
 
 #define sched_getattr(pid, attr, size, flags) \

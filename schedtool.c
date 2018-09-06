@@ -59,6 +59,7 @@
 #define MODE_AFFINITY	0x4
 #define MODE_EXEC	0x8
 #define MODE_NICE       0x10
+#define MODE_UTIL       0x20
 #define VERSION "1.3.0"
 
 /*
@@ -115,6 +116,9 @@ struct engine_s {
 	long dline;
 	long priod;
 
+	long umin;
+	long umax;
+
 	unsigned flags;
 	cpu_set_t aff_mask;
 
@@ -126,11 +130,13 @@ struct engine_s {
 
 int engine(struct engine_s *e);
 int set_process(pid_t pid, int policy, struct sched_attr *p, unsigned int flags);
+int set_util_clamp(pid_t pid, struct sched_attr *p, unsigned int flags);
 static inline int val_to_char(int v);
 static char * cpuset_to_str(cpu_set_t *mask, char *str);
 static inline int char_to_val(int c);
 static int str_to_cpuset(cpu_set_t *mask, const char* str);
 int parse_time(long *rtime, long *dline, long *priod, char *arg);
+int parse_util(long *umin, long *umax, char *arg);
 int parse_flags(unsigned *f, char *arg);
 int parse_affinity(cpu_set_t *, char *arg);
 int set_affinity(pid_t pid, cpu_set_t *mask);
@@ -156,6 +162,7 @@ int main(int ac, char **dc)
 	 */
 	int policy=-1, nice=10, prio=0, mode=MODE_NOTHING;
 	long rtime=0, dline=0, priod=0;
+	long umin=0, umax=0;
 	unsigned flags = 0;
 	/*
 	 aff_mask: zero it out
@@ -171,7 +178,7 @@ int main(int ac, char **dc)
 		return(0);
 	}
 
-	while((c=getopt(ac, dc, "+NFRBIDE012345M:a:p:t:f:n:ervh")) != -1) {
+	while((c=getopt(ac, dc, "+NFRBIDEU:012345M:a:p:t:f:n:ervh")) != -1) {
 
 		switch(c) {
 		case '0':
@@ -217,6 +224,10 @@ int main(int ac, char **dc)
 		case 'a':
 			mode |= MODE_AFFINITY;
 			parse_affinity(&aff_mask, optarg);
+                        break;
+		case 'U':
+			mode |= MODE_UTIL;
+			parse_util(&umin, &umax, optarg);
                         break;
 		case 'n':
                         mode |= MODE_NICE;
@@ -304,7 +315,8 @@ int main(int ac, char **dc)
 
 	if( mode_set(mode, MODE_EXEC) && ! ( mode_set(mode, MODE_SETPOLICY)
 					     || mode_set(mode, MODE_AFFINITY)
-                                             || mode_set(mode, MODE_NICE) )
+                                             || mode_set(mode, MODE_NICE)
+					     || mode_set(mode, MODE_UTIL) )
 
 	  ) {
 		/* we have nothing to do */
@@ -330,6 +342,9 @@ int main(int ac, char **dc)
 		stuff.rtime=rtime;
 		stuff.dline=dline;
 		stuff.priod=priod;
+
+		stuff.umin=umin;
+		stuff.umax=umax;
 
 		stuff.flags=flags;
 		stuff.aff_mask=aff_mask;
@@ -417,6 +432,36 @@ int engine(struct engine_s *e)
 
 		}
 
+		if(mode_set(e->mode, MODE_UTIL)) {
+			struct sched_attr p;
+			unsigned int flags = 0;
+
+			p.size= sizeof(p);
+			p.sched_policy= -1;
+			p.sched_priority= 0;
+			p.sched_runtime= 0;
+			p.sched_deadline= 0;
+			p.sched_period= 0;
+			p.sched_util_min= e->umin;
+			p.sched_util_max= e->umax;
+			p.sched_flags=SF_UTIL_CLAMP;
+
+			/*
+			 accumulate possible errors
+			 the return value of main will indicate
+			 how much set-calls went wrong
+                         set_process returns -1 upon failure
+			 */
+			tmpret=set_util_clamp(pid,&p,flags);
+			ret += tmpret;
+
+                        /* don't proceed as something went wrong already */
+			if(tmpret) {
+				continue;
+			}
+
+		}
+
 		if(mode_set(e->mode, MODE_NICE)) {
 			tmpret=set_niceness(pid, e->nice);
                         ret += tmpret;
@@ -488,6 +533,24 @@ int set_process(pid_t pid, int policy, struct sched_attr *p, unsigned int flags)
 	return(0);
 }
 
+int set_util_clamp(pid_t pid, struct sched_attr *p, unsigned int flags)
+{
+	int ret;
+
+	char *msg1="could not set PID %d to util_min %lu, util_max %lu";
+
+#ifdef DEBUG
+	printf("setting PID %d to util_min %lu, util_max %lu\n",
+		pid, p->sched_util_min, p->sched_util_max);
+#endif
+
+	if((ret=sched_setattr(pid, p, flags))) {
+		decode_error(msg1, pid, p->sched_util_min, p->sched_util_max);
+		return(ret);
+	}
+	return(0);
+}
+
 int parse_time(long *rtime, long *dline, long *priod, char *arg)
 {
 	char *str;
@@ -506,6 +569,23 @@ int parse_time(long *rtime, long *dline, long *priod, char *arg)
 
 #ifdef DEBUG
 	printf("tmp_arg: %s -> rtime: %ld dline: %ld priod: %ld\n", arg, *rtime, *dline);
+#endif
+
+	return str == NULL;
+}
+
+int parse_util(long *umin, long *umax, char *arg)
+{
+	char *str;
+
+	str=strtok(arg, ":");
+	*umin=strtol(str, NULL, 10);
+
+	str=strtok(NULL, ":");
+	*umax=strtol(str, NULL, 10);
+
+#ifdef DEBUG
+	printf("tmp_arg: %s -> umin: %ld umax: %ld\n", arg, *umin, *umax);
 #endif
 
 	return str == NULL;
@@ -779,11 +859,13 @@ void print_process(pid_t pid)
 			      );
 		} else {
 
-			printf("PID %5d: PRIO %3d, POLICY %-17s, NICE %3d",
+			printf("PID %5d: PRIO %3d, POLICY %-17s, NICE %3d, UMIN %3d, UMAX %3d",
 			       pid,
 			       p.sched_priority,
 			       TAB[policy],
-			       nice
+			       nice,
+			       p.sched_util_min,
+			       p.sched_util_max
 			      );
 
 			if (policy == SCHED_DEADLINE) {
@@ -834,7 +916,8 @@ void usage(void)
                "    -p STATIC_PRIORITY    usually 1-99; only for FIFO or RR\n" \
                "                          higher numbers means higher priority\n" \
                "    -n NICE_LEVEL         set niceness to NICE_LEVEL\n" \
-               "    -a AFFINITY_MASK      set CPU-affinity to bitmask or list\n\n" \
+               "    -a AFFINITY_MASK      set CPU-affinity to bitmask or list\n" \
+               "    -U umix:umax          set utilization clamping values\n\n" \
                "    -e COMMAND [ARGS]     start COMMAND with specified policy/priority\n" \
                "    -r                    display priority min/max for each policy\n" \
                "    -v                    be verbose\n" \
